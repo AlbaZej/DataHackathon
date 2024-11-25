@@ -86,38 +86,48 @@ if uploaded_file:
     st.pyplot(plt)
 
     # CLTV Prediction
-    # CLTV Prediction
-st.subheader("CLTV Prediction")
-valid_rfm = rfm[(rfm["Frequency"] > 0) & (rfm["Recency"] > 0) & (rfm["T"] > 0) & (rfm["Monetary"] > 0)]
+    st.subheader("CLTV Prediction")
+    valid_rfm = rfm[(rfm["Frequency"] > 0) & (rfm["Recency"] > 0) & (rfm["T"] > 0) & (rfm["Monetary"] > 0)]
 
-if valid_rfm.empty:
-    st.error("No valid data for CLTV prediction. All monetary values are non-positive. Please check the input data.")
+    if valid_rfm.empty:
+        st.error("No valid data for CLTV prediction. All monetary values are non-positive. Please check the input data.")
+    else:
+        try:
+            # Fit the Beta-Geometric/NBD model
+            bgf = BetaGeoFitter(penalizer_coef=0.01)  # Adding a small penalizer for stability
+            bgf.fit(valid_rfm["Frequency"], valid_rfm["Recency"], valid_rfm["T"])
+
+            # Fit the Gamma-Gamma model
+            ggf = GammaGammaFitter(penalizer_coef=0.01)
+            ggf.fit(valid_rfm["Frequency"], valid_rfm["Monetary"])
+
+            # Predict CLTV
+            valid_rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
+                bgf,
+                valid_rfm["Frequency"],
+                valid_rfm["Recency"],
+                valid_rfm["T"],
+                valid_rfm["Monetary"],  # Pass the monetary values
+                time=12,  # Predict for the next 12 months
+                freq="D"  # Data frequency is daily
+            )
+
+            # Combine Survival Analysis
+            valid_rfm["SurvivalRate"] = kmf.predict(valid_rfm["TimeToChurn"])
+            valid_rfm["AdjustedCLTV"] = valid_rfm["ExpectedRevenue"] * valid_rfm["SurvivalRate"]
+
+            st.write("### Top Customers by Adjusted CLTV")
+            st.write(valid_rfm.sort_values("AdjustedCLTV", ascending=False).head(10))
+        except Exception as e:
+            st.error(f"CLTV Prediction failed: {e}")
+
+    # Download Results
+    st.download_button(
+        "Download RFM and CLTV Results",
+        valid_rfm.to_csv(index=True).encode("utf-8"),
+        "rfm_cltv_results.csv",
+        "text/csv",
+        key="download-csv"
+    )
 else:
-    try:
-        # Fit the Beta-Geometric/NBD model
-        bgf = BetaGeoFitter(penalizer_coef=0.01)  # Adding a small penalizer for stability
-        bgf.fit(valid_rfm["Frequency"], valid_rfm["Recency"], valid_rfm["T"])
-
-        # Fit the Gamma-Gamma model
-        ggf = GammaGammaFitter(penalizer_coef=0.01)
-        ggf.fit(valid_rfm["Frequency"], valid_rfm["Monetary"])
-
-        # Predict CLTV
-        valid_rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
-            bgf,
-            valid_rfm["Frequency"],
-            valid_rfm["Recency"],
-            valid_rfm["T"],
-            valid_rfm["Monetary"],  # Pass the monetary values
-            time=12,  # Predict for the next 12 months
-            freq="D"  # Data frequency is daily
-        )
-
-        # Combine Survival Analysis
-        valid_rfm["SurvivalRate"] = kmf.predict(valid_rfm["TimeToChurn"])
-        valid_rfm["AdjustedCLTV"] = valid_rfm["ExpectedRevenue"] * valid_rfm["SurvivalRate"]
-
-        st.write("### Top Customers by Adjusted CLTV")
-        st.write(valid_rfm.sort_values("AdjustedCLTV", ascending=False).head(10))
-    except Exception as e:
-        st.error(f"CLTV Prediction failed: {e}")
+    st.info("Please upload a CSV or Excel file to start.")
