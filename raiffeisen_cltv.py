@@ -1,149 +1,90 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from lifetimes import BetaGeoFitter, GammaGammaFitter
-from lifelines import KaplanMeierFitter
-import datetime
+import re
 
-# Set Page Layout
-st.set_page_config(layout="wide")
-st.title("Raiffeisen Bank - Customer Lifetime Value Dashboard")
+# Title
+st.title("CLTV Prediction Application")
 
-# File Upload
-uploaded_file = st.file_uploader("Upload Customer Transaction Data", type=["csv", "xlsx"])
+# File upload
+uploaded_file = st.file_uploader(
+    "Upload your dataset (CSV, Excel, JSON)", 
+    type=["csv", "xlsx", "xls", "json"]
+)
 
-if uploaded_file:
-    # Load data
-    file_extension = uploaded_file.name.split(".")[-1].lower()
-    if file_extension == "csv":
-        data = pd.read_csv(uploaded_file)
-    elif file_extension in ["xlsx", "xls"]:
-        import openpyxl
-        data = pd.read_excel(uploaded_file)
-    else:
-        st.error("Unsupported file format.")
-        st.stop()
+if uploaded_file is not None:
+    try:
+        # Load the data
+        if uploaded_file.name.endswith('.csv'):
+            data = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith(('.xls', '.xlsx')):
+            data = pd.read_excel(uploaded_file)
+        elif uploaded_file.name.endswith('.json'):
+            data = pd.read_json(uploaded_file)
+        else:
+            st.error("Unsupported file format!")
+            data = None
+        
+        if data is not None:
+            st.write("Original Data:")
+            st.dataframe(data)
 
-    # Detect Columns
-    def detect_column(possible_names):
-        for col in data.columns:
-            if any(name.lower() in col.lower() for name in possible_names):
-                return col
-        return None
+            # Price Discrepancy Flagging
+            st.subheader("Flag Products with Big Price Discrepancies")
+            price_discrepancy_threshold = st.slider(
+                "Set maximum allowed price variation for a single product (%)", 
+                min_value=0, 
+                max_value=500, 
+                value=100
+            )
 
-    # Expected Columns
-    expected_columns = {
-        "CustomerID": ["customerid", "customer id", "cstid", "id"],
-        "Quantity": ["quantity", "qty", "amount"],
-        "UnitPrice": ["unitprice", "price per unit", "price"],
-        "InvoiceDate": ["invoicedate", "date", "transaction date"]
-    }
+            product_price_stats = data.groupby('StockCode')['Price'].agg(['min', 'max'])
+            product_price_stats['price_variation'] = (
+                (product_price_stats['max'] - product_price_stats['min']) / product_price_stats['min'] * 100
+            )
+            flagged_discrepancies = product_price_stats[
+                product_price_stats['price_variation'] > price_discrepancy_threshold
+            ].index
 
-    detected_columns = {key: detect_column(names) for key, names in expected_columns.items()}
-    missing_columns = [key for key, col in detected_columns.items() if col is None]
-    if missing_columns:
-        st.error(f"Missing required columns: {', '.join(missing_columns)}")
-        st.stop()
+            flagged_rows = data[data['StockCode'].isin(flagged_discrepancies)]
+            st.write(f"Flagged rows with price discrepancies over {price_discrepancy_threshold}%:")
+            st.dataframe(flagged_rows)
 
-    # Rename columns to standard names
-    data = data.rename(columns={v: k for k, v in detected_columns.items()})
-    data["InvoiceDate"] = pd.to_datetime(data["InvoiceDate"])
-    data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
+            rows_to_drop_price = st.multiselect(
+                "Select rows to drop based on price discrepancies:",
+                options=flagged_rows.index,
+                format_func=lambda x: f"Row {x}"
+            )
 
-    # Layout Sections
-    col1, col2 = st.columns([2, 1])
+            # Drop selected rows for price discrepancies
+            if st.button("Drop Selected Rows for Price Discrepancies"):
+                data = data.drop(rows_to_drop_price)
+                st.success(f"Dropped {len(rows_to_drop_price)} rows based on price discrepancies.")
 
-    with col1:
-        st.subheader("Uploaded Data Preview")
-        st.dataframe(data.head(10))
+            # StockCode Pattern Flagging
+            st.subheader("Flag StockCodes with Unwanted Patterns")
+            unwanted_patterns = ["C2", "BANK CHARGES", "AMAZONFEE", "TEST", "GIFT"]
+            flagged_stockcode_rows = data[
+                data['StockCode'].str.contains('|'.join(unwanted_patterns), case=False, na=False)
+            ]
+            st.write("Flagged rows with unwanted StockCode patterns:")
+            st.dataframe(flagged_stockcode_rows)
 
-    with col2:
-        st.subheader("Data Summary")
-        st.write(f"Total Transactions: {len(data)}")
-        st.write(f"Total Customers: {data['CustomerID'].nunique()}")
-        st.write(f"Total Revenue: ${data['TotalPrice'].sum():,.2f}")
+            rows_to_drop_stockcode = st.multiselect(
+                "Select rows to drop based on StockCode patterns:",
+                options=flagged_stockcode_rows.index,
+                format_func=lambda x: f"Row {x}"
+            )
 
-    # EDA Section
-    st.markdown("---")
-    st.header("Exploratory Data Analysis")
+            # Drop selected rows for StockCode patterns
+            if st.button("Drop Selected Rows for StockCode Patterns"):
+                data = data.drop(rows_to_drop_stockcode)
+                st.success(f"Dropped {len(rows_to_drop_stockcode)} rows based on StockCode patterns.")
 
-    # Date Range Selector
-    min_date = data["InvoiceDate"].min().date()
-    max_date = data["InvoiceDate"].max().date()
+            # Display final cleaned data
+            st.subheader("Cleaned Data")
+            st.dataframe(data)
 
-    date_range = st.slider(
-        "Select Date Range for Analysis",
-        min_value=min_date,
-        max_value=max_date,
-        value=(min_date, max_date),
-    )
-
-    filtered_data = data[
-        (data["InvoiceDate"] >= pd.Timestamp(date_range[0])) &
-        (data["InvoiceDate"] <= pd.Timestamp(date_range[1]))
-    ]
-
-    # Sales Over Time
-    st.subheader("Sales Over Time")
-    sales_over_time = filtered_data.groupby(filtered_data["InvoiceDate"].dt.to_period("M"))["TotalPrice"].sum()
-    fig, ax = plt.subplots(figsize=(10, 5))
-    sales_over_time.plot(kind="line", ax=ax)
-    ax.set_title("Monthly Sales")
-    ax.set_ylabel("Sales Amount")
-    st.pyplot(fig)
-
-    # Heatmap
-    st.subheader("Sales Heatmap (Day vs Hour)")
-    filtered_data["Day"] = filtered_data["InvoiceDate"].dt.day_name()
-    filtered_data["Hour"] = filtered_data["InvoiceDate"].dt.hour
-    heatmap_data = filtered_data.pivot_table(values="TotalPrice", index="Day", columns="Hour", aggfunc="sum").fillna(0)
-    st.dataframe(heatmap_data.style.background_gradient(cmap="viridis"))
-
-    # Prediction Section
-    st.markdown("---")
-    st.header("Customer Lifetime Value Prediction")
-
-    rfm = data.groupby("CustomerID").agg(
-        Recency=("InvoiceDate", lambda x: (data["InvoiceDate"].max() - x.max()).days),
-        Frequency=("CustomerID", "count"),
-        Monetary=("TotalPrice", "sum")
-    ).reset_index()
-    rfm["T"] = rfm["Recency"] + 30
-
-    # Fit Models and Predict
-    bgf = BetaGeoFitter(penalizer_coef=0.01)
-    bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["T"])
-    ggf = GammaGammaFitter(penalizer_coef=0.01)
-    ggf.fit(rfm["Frequency"], rfm["Monetary"])
-    rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
-        bgf, rfm["Frequency"], rfm["Recency"], rfm["T"], rfm["Monetary"], time=12, freq="D"
-    )
-
-    st.subheader("Top Customers by Predicted CLTV")
-    st.dataframe(rfm.sort_values("ExpectedRevenue", ascending=False).head(10))
-
-    # Data Manipulation Section
-    st.markdown("---")
-    st.header("Data Manipulation")
-
-    st.subheader("Filter Data by Customer ID")
-    customer_id_filter = st.text_input("Enter Customer ID")
-    if customer_id_filter:
-        filtered_customer_data = data[data["CustomerID"].astype(str).str.contains(customer_id_filter, na=False)]
-        st.write(filtered_customer_data)
-    else:
-        st.write("No filter applied.")
-
-    # Download Section
-    st.markdown("---")
-    st.subheader("Download Processed Data")
-    st.download_button(
-        "Download RFM and CLTV Results",
-        rfm.to_csv(index=False).encode("utf-8"),
-        "rfm_cltv_results.csv",
-        "text/csv",
-    )
-
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
 else:
     st.info("Please upload a file to start.")
