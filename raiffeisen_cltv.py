@@ -1,208 +1,107 @@
-from dash import Dash, dcc, html, Input, Output, State
-import dash_table
+import streamlit as st
 import pandas as pd
-import plotly.express as px
-from sklearn.ensemble import RandomForestRegressor
+import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-import base64
-import io
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 
-# Initialize the app
-app = Dash(__name__)
-server = app.server
+# Set up the app title
+st.title("CLTV Prediction App")
 
-# App Layout
-app.layout = html.Div([
-    html.H1("CLTV Prediction and EDA App", style={"textAlign": "center"}),
+# File upload
+st.sidebar.header("Upload Your Dataset")
+uploaded_file = st.sidebar.file_uploader("Upload a CSV, Excel, or JSON file", type=["csv", "xlsx", "xls", "json"])
 
-    # File upload section
-    dcc.Upload(
-        id='upload-data',
-        children=html.Div(['Drag and Drop or ', html.A('Select a File')]),
-        style={
-            'width': '100%',
-            'height': '60px',
-            'lineHeight': '60px',
-            'borderWidth': '1px',
-            'borderStyle': 'dashed',
-            'borderRadius': '5px',
-            'textAlign': 'center',
-            'margin': '10px'
-        },
-        multiple=False
-    ),
-    html.Div(id='output-data-upload'),
+# Function to read uploaded file
+def read_file(file):
+    if file.name.endswith("csv"):
+        return pd.read_csv(file)
+    elif file.name.endswith(("xlsx", "xls")):
+        return pd.read_excel(file)
+    elif file.name.endswith("json"):
+        return pd.read_json(file)
 
-    html.Hr(),
-    html.Div(id='eda-section'),
+if uploaded_file:
+    # Load the data
+    try:
+        data = read_file(uploaded_file)
+        st.write("## Uploaded Dataset")
+        st.dataframe(data)
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
+        st.stop()
 
-    html.Hr(),
-    html.Div(id='cltv-section')
-])
+    # Data Cleaning
+    st.write("## Data Cleaning")
+    st.write("Automatically handling missing values and dropping duplicates.")
+    data_cleaned = data.drop_duplicates()
+    data_cleaned = data_cleaned.fillna(data_cleaned.mean(numeric_only=True))
+    st.write("### Cleaned Dataset")
+    st.dataframe(data_cleaned)
 
+    # EDA: Summary Statistics
+    st.write("## Exploratory Data Analysis (EDA)")
+    st.write("### Summary Statistics")
+    st.write(data_cleaned.describe())
 
-# Helper Function: Parse and Load Data
-def parse_data(contents, filename):
-    content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-    if 'csv' in filename:
-        df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
-    elif 'xls' in filename:
-        df = pd.read_excel(io.BytesIO(decoded))
-    else:
-        return None
-    return df
+    # EDA: Histograms
+    st.write("### Histograms")
+    numeric_cols = data_cleaned.select_dtypes(include=np.number).columns.tolist()
+    for col in numeric_cols:
+        st.write(f"Histogram for {col}")
+        fig, ax = plt.subplots()
+        data_cleaned[col].hist(ax=ax, bins=20)
+        ax.set_title(f"Histogram for {col}")
+        ax.set_xlabel(col)
+        ax.set_ylabel("Frequency")
+        st.pyplot(fig)
 
+    # EDA: Boxplots
+    st.write("### Boxplots")
+    for col in numeric_cols:
+        st.write(f"Boxplot for {col}")
+        fig, ax = plt.subplots()
+        data_cleaned[col].plot(kind="box", ax=ax)
+        ax.set_title(f"Boxplot for {col}")
+        st.pyplot(fig)
 
-# Helper Function: Dynamically Detect Columns
-def detect_columns(df):
-    column_map = {
-        "CustomerID": None,
-        "InvoiceNo": None,
-        "InvoiceDate": None,
-        "Amount": None
-    }
-    for col in df.columns:
-        if "customer" in col.lower():
-            column_map["CustomerID"] = col
-        elif "invoice" in col.lower():
-            column_map["InvoiceNo"] = col
-        elif "date" in col.lower():
-            column_map["InvoiceDate"] = col
-        elif "amount" in col.lower() or "total" in col.lower() or "quantity" in col.lower():
-            column_map["Amount"] = col
+    # Predicting CLTV
+    st.write("## CLTV Prediction")
+    target_col = st.selectbox("Select the target column (CLTV)", options=numeric_cols)
+    feature_cols = st.multiselect("Select feature columns", options=numeric_cols, default=[col for col in numeric_cols if col != target_col])
 
-    missing = [key for key, value in column_map.items() if value is None]
-    if missing:
-        return None, f"Missing required columns: {', '.join(missing)}"
+    if target_col and feature_cols:
+        X = data_cleaned[feature_cols]
+        y = data_cleaned[target_col]
 
-    return column_map, None
+        # Split the data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+        # Train the model
+        model = LinearRegression()
+        model.fit(X_train, y_train)
 
-# Helper Function: Calculate CLTV Features
-def calculate_cltv_features(df, column_map):
-    df['InvoiceDate'] = pd.to_datetime(df[column_map["InvoiceDate"]])
+        # Predictions
+        y_pred = model.predict(X_test)
 
-    # Snapshot date for Recency calculation
-    snapshot_date = df['InvoiceDate'].max() + pd.Timedelta(days=1)
+        # Metrics
+        mse = mean_squared_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
 
-    # Group by CustomerID
-    cltv_df = df.groupby(column_map["CustomerID"]).agg({
-        column_map["InvoiceDate"]: lambda x: (snapshot_date - x.max()).days,  # Recency
-        column_map["InvoiceNo"]: 'count',  # Frequency
-        column_map["Amount"]: 'sum'  # MonetaryValue
-    }).reset_index()
+        st.write("### Model Performance")
+        st.write(f"Mean Squared Error: {mse:.2f}")
+        st.write(f"R-Squared: {r2:.2f}")
 
-    # Rename columns
-    cltv_df.rename(columns={
-        column_map["InvoiceDate"]: 'Recency',
-        column_map["InvoiceNo"]: 'Frequency',
-        column_map["Amount"]: 'MonetaryValue'
-    }, inplace=True)
+        # Plot Actual vs Predicted
+        st.write("### Actual vs Predicted CLTV")
+        fig, ax = plt.subplots()
+        ax.scatter(y_test, y_pred, alpha=0.7)
+        ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], "k--", lw=2)
+        ax.set_title("Actual vs Predicted CLTV")
+        ax.set_xlabel("Actual")
+        ax.set_ylabel("Predicted")
+        st.pyplot(fig)
 
-    return cltv_df
-
-
-# Helper Function: CLTV Prediction
-def predict_cltv(df):
-    column_map, error = detect_columns(df)
-    if error:
-        return None, error
-
-    cltv_df = calculate_cltv_features(df, column_map)
-
-    # Synthetic CLTV target (example calculation)
-    cltv_df['CLTV'] = cltv_df['MonetaryValue'] * cltv_df['Frequency'] / (cltv_df['Recency'] + 1)
-
-    # Train-test split
-    features = ['Recency', 'Frequency', 'MonetaryValue']
-    target = 'CLTV'
-    X = cltv_df[features]
-    y = cltv_df[target]
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    # Train a Random Forest model
-    model = RandomForestRegressor(random_state=42)
-    model.fit(X_train, y_train)
-
-    # Predict and calculate MSE
-    predictions = model.predict(X_test)
-    mse = mean_squared_error(y_test, predictions)
-
-    return cltv_df, model, f"CLTV Prediction Model trained. MSE: {mse:.2f}"
-
-
-# Helper Function: Generate Visualizations
-def generate_visualizations(df):
-    figs = []
-
-    # Histogram
-    for col in df.select_dtypes(include=['int64', 'float64']).columns:
-        fig = px.histogram(df, x=col, title=f"Histogram of {col}")
-        figs.append(fig)
-
-    # Correlation Matrix
-    corr = df.corr()
-    fig = px.imshow(corr, text_auto=True, title="Correlation Matrix")
-    figs.append(fig)
-
-    return figs
-
-
-# Callbacks
-@app.callback(
-    [Output('output-data-upload', 'children'), Output('eda-section', 'children')],
-    [Input('upload-data', 'contents'), State('upload-data', 'filename')]
-)
-def update_output(contents, filename):
-    if contents:
-        df = parse_data(contents, filename)
-        if df is None:
-            return "Invalid file format", None
-
-        # Perform EDA
-        eda_html = [
-            html.H3("EDA Report"),
-            html.P(f"Shape: {df.shape}"),
-            html.P(f"Missing Values: {df.isnull().sum().to_dict()}"),
-            html.P(f"Duplicate Rows: {df.duplicated().sum()}")
-        ]
-
-        figs = generate_visualizations(df)
-        figs_html = [dcc.Graph(figure=fig) for fig in figs]
-
-        return f"Uploaded {filename}", eda_html + figs_html
-
-    return None, None
-
-
-@app.callback(
-    Output('cltv-section', 'children'),
-    [Input('upload-data', 'contents'), State('upload-data', 'filename')]
-)
-def update_cltv(contents, filename):
-    if contents:
-        df = parse_data(contents, filename)
-        if df is None:
-            return "Invalid file format"
-
-        cltv_df, model, message = predict_cltv(df)
-        if model:
-            return html.Div([
-                html.P(message),
-                dash_table.DataTable(
-                    columns=[{"name": i, "id": i} for i in cltv_df.columns],
-                    data=cltv_df.to_dict('records'),
-                    page_size=10
-                )
-            ])
-        else:
-            return html.Div([html.P(f"Error: {message}")])
-
-    return None
-
-
-# Run the app
-if __name__ == '__main__':
-    app.run_server(debug=True)
+else:
+    st.write("Upload a dataset to get started.")
