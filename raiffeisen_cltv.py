@@ -4,8 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from lifetimes import BetaGeoFitter, GammaGammaFitter
 from lifelines import KaplanMeierFitter
+import datetime
 
-# App Title
+# Set Page Layout
 st.set_page_config(layout="wide")
 st.title("Raiffeisen Bank - Customer Lifetime Value Dashboard")
 
@@ -68,14 +69,20 @@ if uploaded_file:
     st.header("Exploratory Data Analysis")
 
     # Date Range Selector
-    min_date, max_date = data["InvoiceDate"].min(), data["InvoiceDate"].max()
+    min_date = data["InvoiceDate"].min().date()
+    max_date = data["InvoiceDate"].max().date()
+
     date_range = st.slider(
         "Select Date Range for Analysis",
         min_value=min_date,
         max_value=max_date,
         value=(min_date, max_date),
     )
-    filtered_data = data[(data["InvoiceDate"] >= date_range[0]) & (data["InvoiceDate"] <= date_range[1])]
+
+    filtered_data = data[
+        (data["InvoiceDate"] >= pd.Timestamp(date_range[0])) &
+        (data["InvoiceDate"] <= pd.Timestamp(date_range[1]))
+    ]
 
     # Sales Over Time
     st.subheader("Sales Over Time")
