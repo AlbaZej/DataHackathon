@@ -1,39 +1,50 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
 from lifetimes import BetaGeoFitter, GammaGammaFitter
 from lifelines import KaplanMeierFitter
 
 # App Title
-st.title("Raiffeisen Bank - Customer Lifetime Value Prediction")
+st.title("Raiffeisen Bank - Customer Lifetime Value Dashboard")
 
-# File Upload
-uploaded_file = st.file_uploader("Upload Customer Transaction Data (CSV, Excel, or other formats)", type=["csv", "xlsx", "xls"])
+# Sidebar for Navigation
+st.sidebar.title("Navigation")
+options = st.sidebar.radio("Go to", ["Upload Data", "EDA", "Prediction", "Data Manipulation"])
 
+# Global Variables
+uploaded_file = st.sidebar.file_uploader("Upload Customer Transaction Data", type=["csv", "xlsx"])
+
+# Helper functions
+def detect_column(data, possible_names):
+    """Detect the column based on possible name patterns."""
+    for col in data.columns:
+        if any(name.lower() in col.lower() for name in possible_names):
+            return col
+    return None
+
+# Upload Data Section
+if options == "Upload Data":
+    st.header("Upload Customer Data")
+    if uploaded_file:
+        file_extension = uploaded_file.name.split(".")[-1].lower()
+        if file_extension == "csv":
+            data = pd.read_csv(uploaded_file)
+        elif file_extension in ["xlsx", "xls"]:
+            import openpyxl
+            data = pd.read_excel(uploaded_file)
+        else:
+            st.error("Unsupported file format.")
+            st.stop()
+
+        st.subheader("Uploaded Data Preview")
+        st.write(data.head())
+
+# Preprocess and Detect Columns
 if uploaded_file:
-    # Load data
-    file_extension = uploaded_file.name.split(".")[-1].lower()
-    if file_extension in ["csv"]:
-        data = pd.read_csv(uploaded_file)
-    elif file_extension in ["xlsx", "xls"]:
-        import openpyxl
-        data = pd.read_excel(uploaded_file)
-    else:
-        st.error("Unsupported file format.")
+    if "data" not in locals():
+        st.error("Upload a valid file first.")
         st.stop()
-    
-    st.subheader("Uploaded Data")
-    st.write(data.head())
-
-    # Column Detection
-    def detect_column(possible_names):
-        """Detect the column based on possible name patterns."""
-        for col in data.columns:
-            if any(name.lower() in col.lower() for name in possible_names):
-                return col
-        return None
 
     # Expected columns and their patterns
     expected_columns = {
@@ -43,9 +54,7 @@ if uploaded_file:
         "InvoiceDate": ["invoicedate", "date", "transaction date"]
     }
 
-    detected_columns = {key: detect_column(names) for key, names in expected_columns.items()}
-
-    # Check for missing columns
+    detected_columns = {key: detect_column(data, names) for key, names in expected_columns.items()}
     missing_columns = [key for key, col in detected_columns.items() if col is None]
     if missing_columns:
         st.error(f"Missing required columns: {', '.join(missing_columns)}")
@@ -53,91 +62,71 @@ if uploaded_file:
 
     # Rename columns to standard names
     data = data.rename(columns={v: k for k, v in detected_columns.items()})
-
-    # Data Preprocessing
-    st.subheader("Data Preprocessing")
-    data = data.dropna(subset=["CustomerID"])
-    data = data[(data["Quantity"] > 0) & (data["UnitPrice"] > 0)]
-    data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
     data["InvoiceDate"] = pd.to_datetime(data["InvoiceDate"])
-    st.write("### Cleaned Data Preview")
-    st.write(data.head())
+    data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
 
-    # RFM Metrics
-    st.subheader("RFM Analysis")
-    snapshot_date = data["InvoiceDate"].max()
+# EDA Section
+if options == "EDA":
+    if uploaded_file:
+        st.header("Exploratory Data Analysis")
 
-    # Group by CustomerID to calculate RFM metrics
-    rfm = (
-        data.groupby("CustomerID")
-        .agg(
-            Recency=("InvoiceDate", lambda x: (snapshot_date - x.max()).days),
-            Frequency=("CustomerID", "count"),
-            Monetary=("TotalPrice", "sum"),
+        # Date Range Selector
+        min_date, max_date = data["InvoiceDate"].min(), data["InvoiceDate"].max()
+        start_date, end_date = st.date_input(
+            "Select Date Range", [min_date, max_date], min_value=min_date, max_value=max_date
         )
-    )
+        filtered_data = data[(data["InvoiceDate"] >= pd.Timestamp(start_date)) & (data["InvoiceDate"] <= pd.Timestamp(end_date))]
 
-    # Reset index to ensure no duplicate labels
-    rfm = rfm.reset_index()
+        # Plot Sales Over Time
+        sales_over_time = filtered_data.groupby(filtered_data["InvoiceDate"].dt.to_period("M"))["TotalPrice"].sum()
+        st.subheader("Sales Over Time")
+        plt.figure(figsize=(10, 5))
+        sales_over_time.plot(kind="line", title="Monthly Sales")
+        plt.ylabel("Sales Amount")
+        st.pyplot(plt)
 
-    # Calculate 'T' (age of the customer relationship)
-    rfm["T"] = rfm["Recency"] + 30  # Assume a snapshot duration
-    st.write(rfm.head())
+        # Heatmap of Sales by Day and Hour
+        filtered_data["Day"] = filtered_data["InvoiceDate"].dt.day_name()
+        filtered_data["Hour"] = filtered_data["InvoiceDate"].dt.hour
+        sales_heatmap = filtered_data.pivot_table(values="TotalPrice", index="Day", columns="Hour", aggfunc="sum").fillna(0)
+        st.subheader("Sales Heatmap (Day vs Hour)")
+        st.write(sales_heatmap)
 
-    # Kaplan-Meier Survival Analysis
-    st.subheader("Survival Analysis")
-    rfm["Churned"] = (rfm["Recency"] > 180).astype(int)
-    rfm["TimeToChurn"] = rfm["Recency"]
-    kmf = KaplanMeierFitter()
-    kmf.fit(rfm["TimeToChurn"], event_observed=rfm["Churned"])
-    plt.figure(figsize=(10, 5))
-    kmf.plot_survival_function()
-    plt.title("Kaplan-Meier Survival Curve")
-    st.pyplot(plt)
+# Prediction Section
+if options == "Prediction":
+    if uploaded_file:
+        st.header("Customer Lifetime Value Prediction")
 
-    # CLTV Prediction
-    st.subheader("CLTV Prediction")
-    valid_rfm = rfm[(rfm["Frequency"] > 0) & (rfm["Recency"] > 0) & (rfm["T"] > 0) & (rfm["Monetary"] > 0)]
+        # Preprocessing for Prediction
+        rfm = data.groupby("CustomerID").agg(
+            Recency=("InvoiceDate", lambda x: (data["InvoiceDate"].max() - x.max()).days),
+            Frequency=("CustomerID", "count"),
+            Monetary=("TotalPrice", "sum")
+        ).reset_index()
+        rfm["T"] = rfm["Recency"] + 30
 
-    if valid_rfm.empty:
-        st.error("No valid data for CLTV prediction. All monetary values are non-positive. Please check the input data.")
-    else:
-        try:
-            # Fit the Beta-Geometric/NBD model
-            bgf = BetaGeoFitter(penalizer_coef=0.01)  # Adding a small penalizer for stability
-            bgf.fit(valid_rfm["Frequency"], valid_rfm["Recency"], valid_rfm["T"])
+        # Fit Models and Predict
+        bgf = BetaGeoFitter(penalizer_coef=0.01)
+        bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["T"])
+        ggf = GammaGammaFitter(penalizer_coef=0.01)
+        ggf.fit(rfm["Frequency"], rfm["Monetary"])
+        rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
+            bgf, rfm["Frequency"], rfm["Recency"], rfm["T"], rfm["Monetary"], time=12, freq="D"
+        )
 
-            # Fit the Gamma-Gamma model
-            ggf = GammaGammaFitter(penalizer_coef=0.01)
-            ggf.fit(valid_rfm["Frequency"], valid_rfm["Monetary"])
+        st.subheader("Predicted CLTV")
+        st.write(rfm.sort_values("ExpectedRevenue", ascending=False).head(10))
 
-            # Predict CLTV
-            valid_rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
-                bgf,
-                valid_rfm["Frequency"],
-                valid_rfm["Recency"],
-                valid_rfm["T"],
-                valid_rfm["Monetary"],  # Pass the monetary values
-                time=12,  # Predict for the next 12 months
-                freq="D"  # Data frequency is daily
-            )
+# Data Manipulation Section
+if options == "Data Manipulation":
+    if uploaded_file:
+        st.header("Data Manipulation")
 
-            # Combine Survival Analysis
-            valid_rfm["SurvivalRate"] = kmf.predict(valid_rfm["TimeToChurn"])
-            valid_rfm["AdjustedCLTV"] = valid_rfm["ExpectedRevenue"] * valid_rfm["SurvivalRate"]
-
-            st.write("### Top Customers by Adjusted CLTV")
-            st.write(valid_rfm.sort_values("AdjustedCLTV", ascending=False).head(10))
-        except Exception as e:
-            st.error(f"CLTV Prediction failed: {e}")
-
-    # Download Results
-    st.download_button(
-        "Download RFM and CLTV Results",
-        valid_rfm.to_csv(index=False).encode("utf-8"),
-        "rfm_cltv_results.csv",
-        "text/csv",
-        key="download-csv"
-    )
-else:
-    st.info("Please upload a CSV or Excel file to start.")
+        # Filter Data
+        st.subheader("Filter Data")
+        customer_id_filter = st.text_input("Filter by Customer ID")
+        if customer_id_filter:
+            filtered_data = data[data["CustomerID"].astype(str).str.contains(customer_id_filter, na=False)]
+            st.write(filtered_data)
+        else:
+            st.write(data)
