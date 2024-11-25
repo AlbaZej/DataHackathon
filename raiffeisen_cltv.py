@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import re
 
 # Title
 st.title("CLTV Prediction Application")
@@ -28,8 +27,8 @@ if uploaded_file is not None:
             st.write("Original Data:")
             st.dataframe(data)
 
-            # Price Discrepancy Flagging
-            st.subheader("Flag Products with Big Price Discrepancies")
+            # Section 1: Flag Rows with Price Discrepancies
+            st.subheader("1. Flag Products with Large Price Discrepancies")
             price_discrepancy_threshold = st.slider(
                 "Set maximum allowed price variation for a single product (%)", 
                 min_value=0, 
@@ -37,6 +36,7 @@ if uploaded_file is not None:
                 value=100
             )
 
+            # Flag rows with price discrepancies
             product_price_stats = data.groupby('StockCode')['Price'].agg(['min', 'max'])
             product_price_stats['price_variation'] = (
                 (product_price_stats['max'] - product_price_stats['min']) / product_price_stats['min'] * 100
@@ -44,45 +44,29 @@ if uploaded_file is not None:
             flagged_discrepancies = product_price_stats[
                 product_price_stats['price_variation'] > price_discrepancy_threshold
             ].index
+            flagged_rows_price = data[data['StockCode'].isin(flagged_discrepancies)]
 
-            flagged_rows = data[data['StockCode'].isin(flagged_discrepancies)]
-            st.write(f"Flagged rows with price discrepancies over {price_discrepancy_threshold}%:")
-            st.dataframe(flagged_rows)
+            st.write("Flagged Rows with Price Discrepancies:")
+            selected_rows_price = st.experimental_data_editor(flagged_rows_price, num_rows="dynamic")
 
-            rows_to_drop_price = st.multiselect(
-                "Select rows to drop based on price discrepancies:",
-                options=flagged_rows.index,
-                format_func=lambda x: f"Row {x}"
-            )
-
-            # Drop selected rows for price discrepancies
-            if st.button("Drop Selected Rows for Price Discrepancies"):
-                data = data.drop(rows_to_drop_price)
-                st.success(f"Dropped {len(rows_to_drop_price)} rows based on price discrepancies.")
-
-            # StockCode Pattern Flagging
-            st.subheader("Flag StockCodes with Unwanted Patterns")
+            # Section 2: Flag Rows with Unwanted StockCode Patterns
+            st.subheader("2. Flag Rows with Unwanted StockCode Patterns")
             unwanted_patterns = ["C2", "BANK CHARGES", "AMAZONFEE", "TEST", "GIFT"]
-            flagged_stockcode_rows = data[
+            flagged_rows_stockcode = data[
                 data['StockCode'].str.contains('|'.join(unwanted_patterns), case=False, na=False)
             ]
-            st.write("Flagged rows with unwanted StockCode patterns:")
-            st.dataframe(flagged_stockcode_rows)
 
-            rows_to_drop_stockcode = st.multiselect(
-                "Select rows to drop based on StockCode patterns:",
-                options=flagged_stockcode_rows.index,
-                format_func=lambda x: f"Row {x}"
-            )
+            st.write("Flagged Rows with Unwanted StockCode Patterns:")
+            selected_rows_stockcode = st.experimental_data_editor(flagged_rows_stockcode, num_rows="dynamic")
 
-            # Drop selected rows for StockCode patterns
-            if st.button("Drop Selected Rows for StockCode Patterns"):
-                data = data.drop(rows_to_drop_stockcode)
-                st.success(f"Dropped {len(rows_to_drop_stockcode)} rows based on StockCode patterns.")
-
-            # Display final cleaned data
-            st.subheader("Cleaned Data")
-            st.dataframe(data)
+            # Drop Selected Rows
+            if st.button("Drop Selected Rows"):
+                # Combine flagged rows for dropping
+                rows_to_drop = pd.concat([selected_rows_price, selected_rows_stockcode]).index.unique()
+                data = data.drop(rows_to_drop)
+                st.success(f"Dropped {len(rows_to_drop)} rows.")
+                st.write("Cleaned Data:")
+                st.dataframe(data)
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
