@@ -66,12 +66,22 @@ if uploaded_file:
     # RFM Metrics
     st.subheader("RFM Analysis")
     snapshot_date = data["InvoiceDate"].max()
-    rfm = data.groupby("CustomerID").agg({
-        "InvoiceDate": lambda x: (snapshot_date - x.max()).days,
-        "CustomerID": "count",
-        "TotalPrice": "sum"
-    }).rename(columns={"InvoiceDate": "Recency", "CustomerID": "Frequency", "TotalPrice": "Monetary"})
-    rfm["T"] = rfm["Recency"] + 30  # Assumed snapshot duration
+
+    # Group by CustomerID to calculate RFM metrics
+    rfm = (
+        data.groupby("CustomerID")
+        .agg(
+            Recency=("InvoiceDate", lambda x: (snapshot_date - x.max()).days),
+            Frequency=("CustomerID", "count"),
+            Monetary=("TotalPrice", "sum"),
+        )
+    )
+
+    # Reset index to ensure no duplicate labels
+    rfm = rfm.reset_index()
+
+    # Calculate 'T' (age of the customer relationship)
+    rfm["T"] = rfm["Recency"] + 30  # Assume a snapshot duration
     st.write(rfm.head())
 
     # Kaplan-Meier Survival Analysis
@@ -124,7 +134,7 @@ if uploaded_file:
     # Download Results
     st.download_button(
         "Download RFM and CLTV Results",
-        valid_rfm.to_csv(index=True).encode("utf-8"),
+        valid_rfm.to_csv(index=False).encode("utf-8"),
         "rfm_cltv_results.csv",
         "text/csv",
         key="download-csv"
