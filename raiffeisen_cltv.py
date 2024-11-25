@@ -15,7 +15,7 @@ uploaded_file = st.file_uploader("Upload Customer Transaction Data (CSV, Excel, 
 if uploaded_file:
     # Load data
     file_extension = uploaded_file.name.split(".")[-1].lower()
-    if file_extension == "csv":
+    if file_extension in ["csv"]:
         data = pd.read_csv(uploaded_file)
     elif file_extension in ["xlsx", "xls"]:
         import openpyxl
@@ -67,22 +67,11 @@ if uploaded_file:
     st.subheader("RFM Analysis")
     snapshot_date = data["InvoiceDate"].max()
     rfm = data.groupby("CustomerID").agg({
-        "InvoiceDate": [
-            lambda x: (snapshot_date - x.max()).days,  # Recency: Days since last purchase
-            lambda x: (snapshot_date - x.min()).days  # T: Days since first purchase
-        ],
-        "CustomerID": "count",  # Frequency: Number of transactions
-        "TotalPrice": "sum"     # Monetary: Total spend
-    }).reset_index()
-
-    # Rename columns
-    rfm.columns = ["CustomerID", "Recency", "T", "Frequency", "Monetary"]
-
-    # Filter for valid rows
-    rfm = rfm[rfm["Recency"] <= rfm["T"]]  # Ensure Recency is not greater than T
-    rfm = rfm[rfm["Frequency"] > 0]        # Remove customers with no transactions
-    rfm = rfm[rfm["Monetary"] > 0]         # Remove customers with no spending
-
+        "InvoiceDate": lambda x: (snapshot_date - x.max()).days,
+        "CustomerID": "count",
+        "TotalPrice": "sum"
+    }).rename(columns={"InvoiceDate": "Recency", "CustomerID": "Frequency", "TotalPrice": "Monetary"})
+    rfm["T"] = rfm["Recency"] + 30  # Assumed snapshot duration
     st.write(rfm.head())
 
     # Kaplan-Meier Survival Analysis
@@ -98,23 +87,43 @@ if uploaded_file:
 
     # CLTV Prediction
     st.subheader("CLTV Prediction")
-    bgf = BetaGeoFitter()
-    bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["T"])
-    ggf = GammaGammaFitter()
-    ggf.fit(rfm["Frequency"], rfm["Monetary"])
-    rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
-        bgf, rfm["Frequency"], rfm["Recency"], rfm["T"], time=12, freq="D"
-    )
-    rfm["SurvivalRate"] = kmf.predict(rfm["TimeToChurn"])
-    rfm["AdjustedCLTV"] = rfm["ExpectedRevenue"] * rfm["SurvivalRate"]
+    valid_rfm = rfm[(rfm["Frequency"] > 0) & (rfm["Recency"] > 0) & (rfm["T"] > 0)]
+    
+    if valid_rfm.empty:
+        st.error("Insufficient data for CLTV prediction. Please check the input data.")
+    else:
+        try:
+            # Fit the Beta-Geometric/NBD model
+            bgf = BetaGeoFitter(penalizer_coef=0.01)  # Adding a small penalizer for stability
+            bgf.fit(valid_rfm["Frequency"], valid_rfm["Recency"], valid_rfm["T"])
 
-    st.write("### Top Customers by Adjusted CLTV")
-    st.write(rfm.sort_values("AdjustedCLTV", ascending=False).head(10))
+            # Fit the Gamma-Gamma model
+            ggf = GammaGammaFitter(penalizer_coef=0.01)
+            ggf.fit(valid_rfm["Frequency"], valid_rfm["Monetary"])
+
+            # Predict CLTV
+            valid_rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
+                bgf,
+                valid_rfm["Frequency"],
+                valid_rfm["Recency"],
+                valid_rfm["T"],
+                time=12,  # Predict for the next 12 months
+                freq="D"  # Data frequency is daily
+            )
+
+            # Combine Survival Analysis
+            valid_rfm["SurvivalRate"] = kmf.predict(valid_rfm["TimeToChurn"])
+            valid_rfm["AdjustedCLTV"] = valid_rfm["ExpectedRevenue"] * valid_rfm["SurvivalRate"]
+
+            st.write("### Top Customers by Adjusted CLTV")
+            st.write(valid_rfm.sort_values("AdjustedCLTV", ascending=False).head(10))
+        except Exception as e:
+            st.error(f"CLTV Prediction failed: {e}")
 
     # Download Results
     st.download_button(
         "Download RFM and CLTV Results",
-        rfm.to_csv(index=True).encode("utf-8"),
+        valid_rfm.to_csv(index=True).encode("utf-8"),
         "rfm_cltv_results.csv",
         "text/csv",
         key="download-csv"
