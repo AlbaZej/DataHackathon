@@ -57,7 +57,7 @@ if uploaded_file:
     # Data Preprocessing
     st.subheader("Data Preprocessing")
     data = data.dropna(subset=["CustomerID"])
-    data = data[data["Quantity"] > 0]
+    data = data[(data["Quantity"] > 0) & (data["UnitPrice"] > 0)]
     data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
     data["InvoiceDate"] = pd.to_datetime(data["InvoiceDate"])
     st.write("### Cleaned Data Preview")
@@ -87,10 +87,10 @@ if uploaded_file:
 
     # CLTV Prediction
     st.subheader("CLTV Prediction")
-    valid_rfm = rfm[(rfm["Frequency"] > 0) & (rfm["Recency"] > 0) & (rfm["T"] > 0)]
-    
+    valid_rfm = rfm[(rfm["Frequency"] > 0) & (rfm["Recency"] > 0) & (rfm["T"] > 0) & (rfm["Monetary"] > 0)]
+
     if valid_rfm.empty:
-        st.error("Insufficient data for CLTV prediction. Please check the input data.")
+        st.error("No valid data for CLTV prediction. All monetary values are non-positive. Please check the input data.")
     else:
         try:
             # Fit the Beta-Geometric/NBD model
