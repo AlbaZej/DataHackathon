@@ -1,8 +1,5 @@
-streamlit
+dash
 pandas
-numpy
-seaborn
-matplotlib
-lifetimes
-lifelines
-openpyxl
+plotly
+scikit-learn
+gunicorn
