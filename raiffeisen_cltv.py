@@ -15,7 +15,7 @@ uploaded_file = st.file_uploader("Upload Customer Transaction Data (CSV, Excel, 
 if uploaded_file:
     # Load data
     file_extension = uploaded_file.name.split(".")[-1].lower()
-    if file_extension in ["csv"]:
+    if file_extension == "csv":
         data = pd.read_csv(uploaded_file)
     elif file_extension in ["xlsx", "xls"]:
         import openpyxl
@@ -67,10 +67,22 @@ if uploaded_file:
     st.subheader("RFM Analysis")
     snapshot_date = data["InvoiceDate"].max()
     rfm = data.groupby("CustomerID").agg({
-        "InvoiceDate": lambda x: (snapshot_date - x.max()).days,
-        "CustomerID": "count",
-        "TotalPrice": "sum"
-    }).rename(columns={"InvoiceDate": "Recency", "CustomerID": "Frequency", "TotalPrice": "Monetary"})
+        "InvoiceDate": [
+            lambda x: (snapshot_date - x.max()).days,  # Recency: Days since last purchase
+            lambda x: (snapshot_date - x.min()).days  # T: Days since first purchase
+        ],
+        "CustomerID": "count",  # Frequency: Number of transactions
+        "TotalPrice": "sum"     # Monetary: Total spend
+    }).reset_index()
+
+    # Rename columns
+    rfm.columns = ["CustomerID", "Recency", "T", "Frequency", "Monetary"]
+
+    # Filter for valid rows
+    rfm = rfm[rfm["Recency"] <= rfm["T"]]  # Ensure Recency is not greater than T
+    rfm = rfm[rfm["Frequency"] > 0]        # Remove customers with no transactions
+    rfm = rfm[rfm["Monetary"] > 0]         # Remove customers with no spending
+
     st.write(rfm.head())
 
     # Kaplan-Meier Survival Analysis
@@ -87,11 +99,11 @@ if uploaded_file:
     # CLTV Prediction
     st.subheader("CLTV Prediction")
     bgf = BetaGeoFitter()
-    bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["Monetary"])
+    bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["T"])
     ggf = GammaGammaFitter()
     ggf.fit(rfm["Frequency"], rfm["Monetary"])
     rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
-        bgf, rfm["Frequency"], rfm["Recency"], rfm["Monetary"], time=12, freq="D"
+        bgf, rfm["Frequency"], rfm["Recency"], rfm["T"], time=12, freq="D"
     )
     rfm["SurvivalRate"] = kmf.predict(rfm["TimeToChurn"])
     rfm["AdjustedCLTV"] = rfm["ExpectedRevenue"] * rfm["SurvivalRate"]
