@@ -124,23 +124,34 @@ if uploaded_file:
     ).reset_index()
     rfm["T"] = rfm["Recency"] + 30
 
+    # Cap outliers
+    for col in ["Frequency", "Recency", "Monetary", "T"]:
+        upper_limit = rfm[col].quantile(0.99)
+        rfm[col] = rfm[col].clip(upper=upper_limit)
+
     # Fit Models and Predict
     try:
-        bgf = BetaGeoFitter(penalizer_coef=0.1)
+        # Fit the BetaGeoFitter model
+        bgf = BetaGeoFitter(penalizer_coef=0.5)
         bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["T"])
 
+        # Fit the GammaGammaFitter model
         ggf = GammaGammaFitter(penalizer_coef=0.1)
         ggf.fit(rfm["Frequency"], rfm["Monetary"])
 
+        # Predict CLTV
         rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
             bgf, rfm["Frequency"], rfm["Recency"], rfm["T"], rfm["Monetary"], time=12, freq="D"
         )
 
+        # Display Results
         st.subheader("Top Customers by Predicted CLTV")
         st.dataframe(rfm.sort_values("ExpectedRevenue", ascending=False).head(10))
 
     except Exception as e:
         st.error(f"Error during model fitting: {e}")
+        st.write("Try increasing the penalizer coefficient or cleaning the input data.")
+        st.stop()
 
     # Data Manipulation Section
     st.markdown("---")
