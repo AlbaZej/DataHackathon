@@ -6,14 +6,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 
-# Set up the app title
 st.title("CLTV Prediction App")
 
-# File upload
-st.sidebar.header("Upload Your Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV, Excel, or JSON file", type=["csv", "xlsx", "xls", "json"])
-
-# Function to read uploaded file
+@st.cache_data
 def read_file(file):
     if file.name.endswith("csv"):
         return pd.read_csv(file)
@@ -22,7 +17,6 @@ def read_file(file):
     elif file.name.endswith("json"):
         return pd.read_json(file)
 
-# Create side-by-side boxplots for comparison
 def compare_boxplots(data_before, data_after, numeric_cols):
     for col in numeric_cols:
         if col in data_after.columns:
@@ -33,7 +27,6 @@ def compare_boxplots(data_before, data_after, numeric_cols):
             plt.tight_layout()
             st.pyplot(fig)
 
-# Create histograms for numeric columns
 def plot_histograms(data, title):
     numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
     for col in numeric_cols:
@@ -45,8 +38,9 @@ def plot_histograms(data, title):
         ax.set_ylabel("Frequency")
         st.pyplot(fig)
 
+uploaded_file = st.sidebar.file_uploader("Upload a CSV, Excel, or JSON file", type=["csv", "xlsx", "xls", "json"])
+
 if uploaded_file:
-    # Load the data
     try:
         data = read_file(uploaded_file)
         st.write("## Uploaded Dataset")
@@ -55,19 +49,12 @@ if uploaded_file:
         st.error(f"Error reading file: {e}")
         st.stop()
 
-    # EDA Before Cleaning
-    st.write("## Exploratory Data Analysis (Before Cleaning)")
+    st.write("## EDA Before Cleaning")
     st.write("### Summary Statistics")
     st.write(data.describe())
-
-    # Histograms Before Cleaning
     plot_histograms(data, "Before Cleaning")
 
-    # Data Cleaning
     st.write("## Data Cleaning")
-    st.write("Dropping rows where quantity <= 0, price <= 0, price > 200, and rows with specified stockcodes.")
-
-    # Check required columns exist
     required_columns = ["quantity", "price"]
     if all(col in data.columns for col in required_columns):
         cleaned_data = data[
@@ -76,35 +63,28 @@ if uploaded_file:
             (data["price"] <= 200)
         ]
     else:
-        st.write("Dataset does not contain required columns for filtering.")
+        st.write("Dataset does not contain required columns.")
         cleaned_data = pd.DataFrame()
 
-    # Filter stockcodes if column exists
     if "stockcode" in cleaned_data.columns:
         excluded_stockcodes = ["bankcharges", "c2", "dot", "post"]
         cleaned_data = cleaned_data[~cleaned_data["stockcode"].str.lower().isin(excluded_stockcodes)]
     else:
         st.write("Stockcode column not found in dataset.")
 
-    # Check if cleaned data is valid
     if not cleaned_data.empty:
         st.write("### Cleaned Dataset")
         st.dataframe(cleaned_data)
 
-        # EDA After Cleaning
-        st.write("## Exploratory Data Analysis (After Cleaning)")
+        st.write("## EDA After Cleaning")
         st.write("### Summary Statistics")
         st.write(cleaned_data.describe())
-
-        # Histograms After Cleaning
         plot_histograms(cleaned_data, "After Cleaning")
 
-        # Compare Boxplots Before and After Cleaning
-        st.write("### Boxplots Comparison: Before and After Cleaning")
+        st.write("### Boxplots Comparison")
         numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
         compare_boxplots(data, cleaned_data, numeric_cols)
 
-        # Feature Engineering
         st.write("## Feature Engineering")
         if all(col in cleaned_data.columns for col in ["quantity", "price", "customer_id", "invoice_date"]):
             cleaned_data["transaction_value"] = cleaned_data["quantity"] * cleaned_data["price"]
@@ -117,49 +97,35 @@ if uploaded_file:
             st.write("### Engineered Features")
             st.dataframe(customer_group)
 
-            # Predicting CLTV
             st.write("## CLTV Prediction")
-            if "total_transaction_value" in customer_group.columns:
-                # Use engineered features for prediction
-                target_col = "total_transaction_value"  # Assuming total transaction value as CLTV
-                feature_cols = ["frequency", "avg_transaction_value", "length_of_relationship"]
+            target_col = "total_transaction_value"
+            feature_cols = ["frequency", "avg_transaction_value", "length_of_relationship"]
 
-                X = customer_group[feature_cols]
-                y = customer_group[target_col]
+            X = customer_group[feature_cols]
+            y = customer_group[target_col]
 
-                # Split the data
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+            model = LinearRegression()
+            model.fit(X_train, y_train)
 
-                # Train the model
-                model = LinearRegression()
-                model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
 
-                # Predictions
-                y_pred = model.predict(X_test)
+            mse = mean_squared_error(y_test, y_pred)
+            r2 = r2_score(y_test, y_pred)
 
-                # Metrics
-                mse = mean_squared_error(y_test, y_pred)
-                r2 = r2_score(y_test, y_pred)
+            st.write("### Model Performance")
+            st.write(f"Mean Squared Error: {mse:.2f}")
+            st.write(f"R-Squared: {r2:.2f}")
 
-                st.write("### Model Performance")
-                st.write(f"Mean Squared Error: {mse:.2f}")
-                st.write(f"R-Squared: {r2:.2f}")
-
-                # Plot Actual vs Predicted
-                st.write("### Actual vs Predicted CLTV")
-                fig, ax = plt.subplots()
-                ax.scatter(y_test, y_pred, alpha=0.7)
-                ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], "k--", lw=2)
-                ax.set_title("Actual vs Predicted CLTV")
-                ax.set_xlabel("Actual")
-                ax.set_ylabel("Predicted")
-                st.pyplot(fig)
-            else:
-                st.write("Required columns for CLTV prediction are missing.")
-        else:
-            st.warning("Required columns (e.g., 'quantity', 'price', 'customer_id', 'invoice_date') are missing for feature engineering.")
+            fig, ax = plt.subplots()
+            ax.scatter(y_test, y_pred, alpha=0.7)
+            ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], "k--", lw=2)
+            ax.set_title("Actual vs Predicted CLTV")
+            ax.set_xlabel("Actual")
+            ax.set_ylabel("Predicted")
+            st.pyplot(fig)
 
     else:
-        st.write("Cleaned data is empty after applying filters.")
+        st.write("Cleaned dataset is empty. Check cleaning criteria.")
 else:
     st.write("Upload a dataset to get started.")
