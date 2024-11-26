@@ -1,109 +1,86 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from sklearn.linear_model import LinearRegression
+import numpy as np
+import datetime
 
-# Load data
-data = pd.read_csv("customer_transactions.csv")
-data['Date'] = pd.to_datetime(data['Date'])
-
-# Predict CLV based on simple model
+# Function to simulate CLV prediction (for the sake of this example)
 def predict_clv(data):
-    X = data[['Recency', 'Frequency', 'Monetary']]
-    y = data['CLV']
-    model = LinearRegression()
-    model.fit(X, y)
-    data['Predicted_CLV'] = model.predict(X)
+    # Simple CLV calculation based on frequency and monetary values
+    data['CLV'] = data['Frequency'] * data['Monetary']
     return data
 
-data = predict_clv(data)
+# Create some sample data if no file is uploaded
+def create_sample_data():
+    np.random.seed(42)  # For reproducibility
+    
+    # Generate random data for 100 customers
+    customer_ids = np.arange(1, 101)
+    products = ['Product A', 'Product B', 'Product C', 'Product D']
+    
+    # Sample data for customers
+    data = {
+        'Customer_ID': np.random.choice(customer_ids, size=500),
+        'Product_ID': np.random.choice(products, size=500),
+        'Sales_Amount': np.random.uniform(10, 500, size=500),
+        'Frequency': np.random.randint(1, 20, size=500),
+        'Monetary': np.random.uniform(50, 1000, size=500),
+        'Date': pd.to_datetime(np.random.choice(pd.date_range('2023-01-01', '2023-12-31', freq='D'), size=500))
+    }
+    
+    return pd.DataFrame(data)
 
-# Include TailwindCSS via CDN for styling
-st.markdown(
-    """
-    <style>
-        @import url('https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css');
-    </style>
-    """, 
-    unsafe_allow_html=True
-)
+# Generate sample data
+data = create_sample_data()
 
-# Add custom CSS for better styling
-st.markdown("""
-    <style>
-        .main-header { 
-            font-size: 3em; 
-            font-weight: bold; 
-            color: #4A90E2; 
-        }
-        .sub-header { 
-            font-size: 2em; 
-            font-weight: 600; 
-            color: #4A90E2;
-        }
-        .card {
-            background-color: #f3f4f6;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0px 10px 20px rgba(0, 0, 0, 0.1);
-        }
-        .card-title {
-            font-size: 1.5em;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        .card-content {
-            font-size: 1.1em;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# Show the first few rows of the sample data to the user
+st.write("Sample Data Preview:")
+st.dataframe(data.head())  # Display the first 5 rows of the data
 
-# Layout: Main Header
-st.markdown('<div class="main-header">Customer Lifetime Value Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Time Series Analysis & Product Insights</div>', unsafe_allow_html=True)
+# Add a title
+st.title("Customer Lifetime Value (CLV) Dashboard")
 
-# Sidebar for filters
-st.sidebar.markdown('<div class="card"><div class="card-title">Filters</div></div>', unsafe_allow_html=True)
-selected_product = st.sidebar.selectbox("Select Product", options=data['Product_ID'].unique())
-start_date = st.sidebar.date_input('Start Date', min_value=data['Date'].min(), max_value=data['Date'].max())
-end_date = st.sidebar.date_input('End Date', min_value=data['Date'].min(), max_value=data['Date'].max())
-
-# Time-Series Sales over Time
+# Time Series Analysis - Sales Over Time
+st.subheader("Sales Over Time")
 sales_over_time = data.groupby(data['Date'].dt.to_period('M'))['Sales_Amount'].sum().reset_index()
-fig = px.line(sales_over_time, x='Date', y='Sales_Amount', title='Sales Over Time')
-st.plotly_chart(fig)
+sales_over_time['Date'] = sales_over_time['Date'].dt.to_timestamp()  # Convert period to timestamp for plotting
 
-# Filter data
-filtered_data = data[(data['Product_ID'] == selected_product) & 
-                     (data['Date'] >= pd.to_datetime(start_date)) & 
-                     (data['Date'] <= pd.to_datetime(end_date))]
+# Plot sales over time
+fig_sales = px.line(sales_over_time, x='Date', y='Sales_Amount', title='Sales Over Time', labels={'Date': 'Date', 'Sales_Amount': 'Sales Amount'})
+st.plotly_chart(fig_sales)
 
-# Columns layout for organized sections
-col1, col2 = st.columns([3, 1])
+# Filter by date range (user input)
+st.sidebar.subheader("Filters")
+min_date, max_date = data['Date'].min(), data['Date'].max()
+start_date = st.sidebar.date_input("Start Date", min_date)
+end_date = st.sidebar.date_input("End Date", max_date)
 
-with col1:
-    st.markdown('<div class="card"><div class="card-title">Filtered Data</div></div>', unsafe_allow_html=True)
-    st.dataframe(filtered_data)
+# Filter data by selected date range
+filtered_data = data[(data['Date'] >= pd.to_datetime(start_date)) & (data['Date'] <= pd.to_datetime(end_date))]
+st.write(f"Displaying data from {start_date} to {end_date}")
 
-with col2:
-    st.markdown('<div class="card"><div class="card-title">Predicted CLV</div></div>', unsafe_allow_html=True)
-    st.dataframe(data[['Customer_ID', 'Predicted_CLV']])
+# CLV prediction
+st.subheader("Customer Lifetime Value (CLV) Prediction")
+filtered_data = predict_clv(filtered_data)
+
+# Display predicted CLV
+st.dataframe(filtered_data[['Customer_ID', 'CLV']].head())
 
 # Product Sales Analysis
-product_sales = data.groupby('Product_ID')['Sales_Amount'].sum().reset_index()
-product_sales_sorted = product_sales.sort_values(by='Sales_Amount', ascending=False)
+st.subheader("Total Sales by Product")
+product_sales = filtered_data.groupby('Product_ID')['Sales_Amount'].sum().reset_index()
+fig_product_sales = px.bar(product_sales, x='Product_ID', y='Sales_Amount', title='Total Sales by Product', labels={'Product_ID': 'Product', 'Sales_Amount': 'Total Sales'})
+st.plotly_chart(fig_product_sales)
 
-fig2 = px.bar(product_sales_sorted, x='Product_ID', y='Sales_Amount', title='Total Sales by Product')
-st.plotly_chart(fig2)
+# Top and Least Selling Products
+st.subheader("Top and Least Selling Products")
 
-# Summary: Top and Least Selling Products
-st.markdown('<div class="sub-header">Product Sales Overview</div>', unsafe_allow_html=True)
+# Sort products by sales
+top_products = product_sales.sort_values(by='Sales_Amount', ascending=False).head(10)
+least_products = product_sales.sort_values(by='Sales_Amount').head(10)
 
-col1, col2 = st.columns(2)
-with col1:
-    st.markdown('<div class="card"><div class="card-title">Top Products</div></div>', unsafe_allow_html=True)
-    st.dataframe(product_sales_sorted.head(10))
+st.write("Top 10 Best Selling Products:")
+st.dataframe(top_products)
 
-with col2:
-    st.markdown('<div class="card"><div class="card-title">Least Products</div></div>', unsafe_allow_html=True)
-    st.dataframe(product_sales_sorted.tail(10))
+st.write("Top 10 Least Selling Products:")
+st.dataframe(least_products)
