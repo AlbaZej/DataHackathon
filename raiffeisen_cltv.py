@@ -2,11 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
+from lifetimes import GammaGammaFitter
+from lifetimes import BetaGeoFitter
 
-st.title("CLTV Prediction App")
+st.title("CLTV Prediction App (Probabilistic Model)")
 
 @st.cache_data
 def read_file(file):
@@ -58,8 +57,8 @@ if uploaded_file:
     required_columns = ["quantity", "price"]
     if all(col in data.columns for col in required_columns):
         cleaned_data = data[
-            (data["quantity"] > 0) &
-            (data["price"] > 0) &
+            (data["quantity"] > 0) & 
+            (data["price"] > 0) & 
             (data["price"] <= 200)
         ]
     else:
@@ -88,42 +87,47 @@ if uploaded_file:
         st.write("## Feature Engineering")
         if all(col in cleaned_data.columns for col in ["quantity", "price", "customer_id", "invoice_date"]):
             cleaned_data["transaction_value"] = cleaned_data["quantity"] * cleaned_data["price"]
+
             customer_group = cleaned_data.groupby("customer_id").agg(
                 frequency=("invoice_date", "count"),
                 avg_transaction_value=("transaction_value", "mean"),
-                total_transaction_value=("transaction_value", "sum"),
-                length_of_relationship=("invoice_date", lambda x: (x.max() - x.min()).days if len(x) > 1 else 0)
+                total_transaction_value=("transaction_value", "sum")
             ).reset_index()
+            
+            # Filter customers with at least 2 transactions for probabilistic modeling
+            customer_group = customer_group[customer_group["frequency"] > 1]
+
             st.write("### Engineered Features")
             st.dataframe(customer_group)
 
-            st.write("## CLTV Prediction")
-            target_col = "total_transaction_value"
-            feature_cols = ["frequency", "avg_transaction_value", "length_of_relationship"]
+            st.write("## CLTV Prediction Using Gamma-Gamma Model")
+            
+            # Fit the Gamma-Gamma model
+            ggf = GammaGammaFitter(penalizer_coef=0.01)
+            ggf.fit(customer_group["frequency"], customer_group["avg_transaction_value"])
 
-            X = customer_group[feature_cols]
-            y = customer_group[target_col]
+            # Estimate monetary value (CLTV)
+            customer_group["predicted_cltv"] = ggf.conditional_expected_average_profit(
+                customer_group["frequency"], 
+                customer_group["avg_transaction_value"]
+            )
 
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-            model = LinearRegression()
-            model.fit(X_train, y_train)
+            st.write("### Predicted CLTV")
+            st.dataframe(customer_group[["customer_id", "predicted_cltv"]])
 
-            y_pred = model.predict(X_test)
+            st.write("### Gamma-Gamma Model Parameters")
+            st.write(f"p: {ggf.params_['p']:.2f}, q: {ggf.params_['q']:.2f}, v: {ggf.params_['v']:.2f}")
 
-            mse = mean_squared_error(y_test, y_pred)
-            r2 = r2_score(y_test, y_pred)
-
-            st.write("### Model Performance")
-            st.write(f"Mean Squared Error: {mse:.2f}")
-            st.write(f"R-Squared: {r2:.2f}")
-
+            # Visualize the distribution of predicted CLTV
             fig, ax = plt.subplots()
-            ax.scatter(y_test, y_pred, alpha=0.7)
-            ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], "k--", lw=2)
-            ax.set_title("Actual vs Predicted CLTV")
-            ax.set_xlabel("Actual")
-            ax.set_ylabel("Predicted")
+            customer_group["predicted_cltv"].hist(ax=ax, bins=20)
+            ax.set_title("Predicted CLTV Distribution")
+            ax.set_xlabel("Predicted CLTV")
+            ax.set_ylabel("Frequency")
             st.pyplot(fig)
+
+        else:
+            st.warning("Required columns (e.g., 'quantity', 'price', 'customer_id', 'invoice_date') are missing for feature engineering.")
 
     else:
         st.write("Cleaned dataset is empty. Check cleaning criteria.")
