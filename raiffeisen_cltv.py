@@ -1,179 +1,109 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from lifetimes import BetaGeoFitter, GammaGammaFitter
+import plotly.express as px
+from sklearn.linear_model import LinearRegression
 
-# Set Page Layout
-st.set_page_config(layout="wide")
-st.title("Raiffeisen Bank - Customer Lifetime Value Dashboard")
+# Load data
+data = pd.read_csv("customer_transactions.csv")
+data['Date'] = pd.to_datetime(data['Date'])
 
-# File Upload
-uploaded_file = st.file_uploader("Upload Customer Transaction Data", type=["csv", "xlsx"])
+# Predict CLV based on simple model
+def predict_clv(data):
+    X = data[['Recency', 'Frequency', 'Monetary']]
+    y = data['CLV']
+    model = LinearRegression()
+    model.fit(X, y)
+    data['Predicted_CLV'] = model.predict(X)
+    return data
 
-if uploaded_file:
-    # Load data
-    file_extension = uploaded_file.name.split(".")[-1].lower()
-    if file_extension == "csv":
-        data = pd.read_csv(uploaded_file)
-    elif file_extension in ["xlsx", "xls"]:
-        import openpyxl
-        data = pd.read_excel(uploaded_file)
-    else:
-        st.error("Unsupported file format.")
-        st.stop()
+data = predict_clv(data)
 
-    # Detect Columns Dynamically
-    def detect_column(possible_names):
-        """
-        Detect a column from the dataset dynamically based on possible column names.
-        :param possible_names: List of possible names for a column
-        :return: Detected column name or None
-        """
-        for col in data.columns:
-            if any(name.lower() in col.lower() for name in possible_names):
-                return col
-        return None
+# Include TailwindCSS via CDN for styling
+st.markdown(
+    """
+    <style>
+        @import url('https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css');
+    </style>
+    """, 
+    unsafe_allow_html=True
+)
 
-    # Expected Columns with Possible Names
-    expected_columns = {
-        "CustomerID": ["customerid", "customer id", "cstid", "id"],
-        "Quantity": ["quantity", "qty", "amount"],
-        "UnitPrice": ["unitprice", "price per unit", "price"],
-        "InvoiceDate": ["invoicedate", "date", "transaction date"],
-        "StockCode": ["stockcode", "stock code", "item code", "sku"]
-    }
+# Add custom CSS for better styling
+st.markdown("""
+    <style>
+        .main-header { 
+            font-size: 3em; 
+            font-weight: bold; 
+            color: #4A90E2; 
+        }
+        .sub-header { 
+            font-size: 2em; 
+            font-weight: 600; 
+            color: #4A90E2;
+        }
+        .card {
+            background-color: #f3f4f6;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0px 10px 20px rgba(0, 0, 0, 0.1);
+        }
+        .card-title {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .card-content {
+            font-size: 1.1em;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-    # Dynamically detect and rename columns
-    detected_columns = {key: detect_column(names) for key, names in expected_columns.items()}
-    missing_columns = [key for key, col in detected_columns.items() if col is None]
+# Layout: Main Header
+st.markdown('<div class="main-header">Customer Lifetime Value Dashboard</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Time Series Analysis & Product Insights</div>', unsafe_allow_html=True)
 
-    if missing_columns:
-        st.error(f"Missing required columns: {', '.join(missing_columns)}")
-        st.stop()
+# Sidebar for filters
+st.sidebar.markdown('<div class="card"><div class="card-title">Filters</div></div>', unsafe_allow_html=True)
+selected_product = st.sidebar.selectbox("Select Product", options=data['Product_ID'].unique())
+start_date = st.sidebar.date_input('Start Date', min_value=data['Date'].min(), max_value=data['Date'].max())
+end_date = st.sidebar.date_input('End Date', min_value=data['Date'].min(), max_value=data['Date'].max())
 
-    # Rename detected columns to standard names
-    data = data.rename(columns={v: k for k, v in detected_columns.items()})
+# Time-Series Sales over Time
+sales_over_time = data.groupby(data['Date'].dt.to_period('M'))['Sales_Amount'].sum().reset_index()
+fig = px.line(sales_over_time, x='Date', y='Sales_Amount', title='Sales Over Time')
+st.plotly_chart(fig)
 
-    # Validate Data
-    if data.empty:
-        st.error("Uploaded dataset is empty or invalid. Please check the file and try again.")
-        st.stop()
+# Filter data
+filtered_data = data[(data['Product_ID'] == selected_product) & 
+                     (data['Date'] >= pd.to_datetime(start_date)) & 
+                     (data['Date'] <= pd.to_datetime(end_date))]
 
-    # Preprocess Data
-    data["InvoiceDate"] = pd.to_datetime(data["InvoiceDate"])
-    data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
+# Columns layout for organized sections
+col1, col2 = st.columns([3, 1])
 
-    # Layout Sections
-    col1, col2 = st.columns([2, 1])
+with col1:
+    st.markdown('<div class="card"><div class="card-title">Filtered Data</div></div>', unsafe_allow_html=True)
+    st.dataframe(filtered_data)
 
-    with col1:
-        st.subheader("Uploaded Data Preview")
-        st.dataframe(data.head(10))
+with col2:
+    st.markdown('<div class="card"><div class="card-title">Predicted CLV</div></div>', unsafe_allow_html=True)
+    st.dataframe(data[['Customer_ID', 'Predicted_CLV']])
 
-    with col2:
-        st.subheader("Data Summary")
-        st.write(f"Total Transactions: {len(data)}")
-        st.write(f"Total Customers: {data['CustomerID'].nunique()}")
-        st.write(f"Total Revenue: ${data['TotalPrice'].sum():,.2f}")
+# Product Sales Analysis
+product_sales = data.groupby('Product_ID')['Sales_Amount'].sum().reset_index()
+product_sales_sorted = product_sales.sort_values(by='Sales_Amount', ascending=False)
 
-    # EDA Section
-    st.markdown("---")
-    st.header("Exploratory Data Analysis")
+fig2 = px.bar(product_sales_sorted, x='Product_ID', y='Sales_Amount', title='Total Sales by Product')
+st.plotly_chart(fig2)
 
-    # Date Range Selector
-    min_date = data["InvoiceDate"].min().date()
-    max_date = data["InvoiceDate"].max().date()
+# Summary: Top and Least Selling Products
+st.markdown('<div class="sub-header">Product Sales Overview</div>', unsafe_allow_html=True)
 
-    date_range = st.slider(
-        "Select Date Range for Analysis",
-        min_value=min_date,
-        max_value=max_date,
-        value=(min_date, max_date),
-    )
+col1, col2 = st.columns(2)
+with col1:
+    st.markdown('<div class="card"><div class="card-title">Top Products</div></div>', unsafe_allow_html=True)
+    st.dataframe(product_sales_sorted.head(10))
 
-    filtered_data = data[
-        (data["InvoiceDate"] >= pd.Timestamp(date_range[0])) &
-        (data["InvoiceDate"] <= pd.Timestamp(date_range[1]))
-    ]
-
-    # Sales Over Time
-    st.subheader("Sales Over Time")
-    sales_over_time = filtered_data.groupby(filtered_data["InvoiceDate"].dt.to_period("M"))["TotalPrice"].sum()
-    fig, ax = plt.subplots(figsize=(10, 5))
-    sales_over_time.plot(kind="line", ax=ax)
-    ax.set_title("Monthly Sales")
-    ax.set_ylabel("Sales Amount")
-    st.pyplot(fig)
-
-    # Heatmap
-    st.subheader("Sales Heatmap (Day vs Hour)")
-    filtered_data["Day"] = filtered_data["InvoiceDate"].dt.day_name()
-    filtered_data["Hour"] = filtered_data["InvoiceDate"].dt.hour
-    heatmap_data = filtered_data.pivot_table(values="TotalPrice", index="Day", columns="Hour", aggfunc="sum").fillna(0)
-    st.dataframe(heatmap_data.style.background_gradient(cmap="viridis"))
-
-    # Prediction Section
-    st.markdown("---")
-    st.header("Customer Lifetime Value Prediction")
-
-    rfm = data.groupby("CustomerID").agg(
-        Recency=("InvoiceDate", lambda x: (data["InvoiceDate"].max() - x.max()).days),
-        Frequency=("CustomerID", "count"),
-        Monetary=("TotalPrice", "sum")
-    ).reset_index()
-    rfm["T"] = rfm["Recency"] + 30
-
-    # Cap outliers
-    for col in ["Frequency", "Recency", "Monetary", "T"]:
-        upper_limit = rfm[col].quantile(0.99)
-        rfm[col] = rfm[col].clip(upper=upper_limit)
-
-    # Fit Models and Predict
-    try:
-        # Fit the BetaGeoFitter model
-        bgf = BetaGeoFitter(penalizer_coef=0.5)
-        bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["T"])
-
-        # Fit the GammaGammaFitter model
-        ggf = GammaGammaFitter(penalizer_coef=0.1)
-        ggf.fit(rfm["Frequency"], rfm["Monetary"])
-
-        # Predict CLTV
-        rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
-            bgf, rfm["Frequency"], rfm["Recency"], rfm["T"], rfm["Monetary"], time=12, freq="D"
-        )
-
-        # Display Results
-        st.subheader("Top Customers by Predicted CLTV")
-        st.dataframe(rfm.sort_values("ExpectedRevenue", ascending=False).head(10))
-
-    except Exception as e:
-        st.error(f"Error during model fitting: {e}")
-        st.write("Try increasing the penalizer coefficient or cleaning the input data.")
-        st.stop()
-
-    # Data Manipulation Section
-    st.markdown("---")
-    st.header("Data Manipulation")
-
-    st.subheader("Filter Data by Customer ID")
-    customer_id_filter = st.text_input("Enter Customer ID")
-    if customer_id_filter:
-        filtered_customer_data = data[data["CustomerID"].astype(str).str.contains(customer_id_filter, na=False)]
-        st.write(filtered_customer_data)
-    else:
-        st.write("No filter applied.")
-
-    # Download Section
-    st.markdown("---")
-    st.subheader("Download Processed Data")
-    st.download_button(
-        "Download RFM and CLTV Results",
-        rfm.to_csv(index=False).encode("utf-8"),
-        "rfm_cltv_results.csv",
-        "text/csv",
-    )
-
-else:
-    st.info("Please upload a file to start.")
+with col2:
+    st.markdown('<div class="card"><div class="card-title">Least Products</div></div>', unsafe_allow_html=True)
+    st.dataframe(product_sales_sorted.tail(10))
