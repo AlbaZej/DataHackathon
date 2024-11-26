@@ -38,6 +38,22 @@ def create_sample_data():
     
     return pd.DataFrame(data)
 
+# Data cleaning functions
+def clean_data(data):
+    # Remove duplicate rows
+    data_cleaned = data.drop_duplicates()
+    
+    # Fill missing values (e.g., with the mean or median)
+    data_cleaned['Sales_Amount'] = data_cleaned['Sales_Amount'].fillna(data_cleaned['Sales_Amount'].median())
+    data_cleaned['Frequency'] = data_cleaned['Frequency'].fillna(data_cleaned['Frequency'].mode()[0])
+    data_cleaned['Monetary'] = data_cleaned['Monetary'].fillna(data_cleaned['Monetary'].median())
+    
+    # Ensure data types are correct
+    data_cleaned['Customer_ID'] = data_cleaned['Customer_ID'].astype(int)
+    data_cleaned['Product_ID'] = data_cleaned['Product_ID'].astype(str)
+    
+    return data_cleaned
+
 # Generate sample data
 data = create_sample_data()
 
@@ -45,7 +61,7 @@ data = create_sample_data()
 st.title("Customer Analytics Dashboard")
 
 # Sidebar for navigation
-sidebar = st.sidebar.radio("Select Page", ("Flagged Data", "Statistics", "Prediction"))
+sidebar = st.sidebar.radio("Select Page", ("Flagged Data", "Statistics", "Prediction", "Data Cleaning"))
 
 # Filter data by date range (optional feature)
 st.sidebar.subheader("Date Range Filter")
@@ -62,7 +78,23 @@ if sidebar == "Flagged Data":
     st.subheader("Flagged Data (Anomalies)")
     flagged_data = filtered_data[filtered_data['Anomaly'] == True]
     st.write(f"Found {len(flagged_data)} flagged anomalies")
+    
+    # Display flagged anomalies
     st.dataframe(flagged_data)
+    
+    # Insights on anomalies
+    st.subheader("Why These Are Anomalies")
+    anomaly_insights = []
+    
+    for idx, row in flagged_data.iterrows():
+        if row['Sales_Amount'] > 400:
+            anomaly_insights.append(f"Customer {row['Customer_ID']} with Sales Amount {row['Sales_Amount']} is flagged due to unusually high sales.")
+        if row['Frequency'] > 15:
+            anomaly_insights.append(f"Customer {row['Customer_ID']} with Frequency {row['Frequency']} is flagged due to an unusually high purchase frequency.")
+        if row['Monetary'] > 900:
+            anomaly_insights.append(f"Customer {row['Customer_ID']} with Monetary {row['Monetary']} is flagged due to unusually high monetary value.")
+    
+    st.write("\n".join(anomaly_insights))
 
 elif sidebar == "Statistics":
     st.subheader("Statistics & Visualizations")
@@ -96,3 +128,21 @@ elif sidebar == "Prediction":
     survival_data = predict_survival_rate(filtered_data.copy(), selected_months)
     st.write(f"Predicted Survival Rate for {selected_months} months")
     st.dataframe(survival_data[['Customer_ID', 'Survival_Rate']].head())
+
+elif sidebar == "Data Cleaning":
+    st.subheader("Data Cleaning")
+    
+    # Show raw data preview before cleaning
+    st.write("**Raw Data Preview**")
+    st.dataframe(filtered_data.head())
+    
+    # Clean the data
+    st.write("**Cleaning the Data**")
+    cleaned_data = clean_data(filtered_data)
+    
+    # Show cleaned data preview
+    st.write("**Cleaned Data Preview**")
+    st.dataframe(cleaned_data.head())
+    
+    # Show message indicating cleaning is done
+    st.write("Data has been cleaned. Duplicate rows have been removed, missing values have been filled, and data types have been corrected.")
