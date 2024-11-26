@@ -22,6 +22,16 @@ def read_file(file):
     elif file.name.endswith("json"):
         return pd.read_json(file)
 
+# Create side-by-side boxplots for comparison
+def compare_boxplots(data_before, data_after, numeric_cols):
+    for col in numeric_cols:
+        if col in data_after.columns:
+            fig, axes = plt.subplots(1, 2, figsize=(10, 5), sharey=True)
+            data_before[col].plot(kind="box", ax=axes[0], title=f"Before Cleaning: {col}")
+            data_after[col].plot(kind="box", ax=axes[1], title=f"After Cleaning: {col}")
+            plt.tight_layout()
+            st.pyplot(fig)
+
 if uploaded_file:
     # Load the data
     try:
@@ -32,48 +42,77 @@ if uploaded_file:
         st.error(f"Error reading file: {e}")
         st.stop()
 
-    # Data Cleaning
-    st.write("## Data Cleaning")
-    st.write("Automatically handling missing values and dropping duplicates.")
-    data_cleaned = data.drop_duplicates()
-    data_cleaned = data_cleaned.fillna(data_cleaned.mean(numeric_only=True))
-    st.write("### Cleaned Dataset")
-    st.dataframe(data_cleaned)
-
-    # EDA: Summary Statistics
-    st.write("## Exploratory Data Analysis (EDA)")
+    # EDA Before Cleaning
+    st.write("## Exploratory Data Analysis (Before Cleaning)")
     st.write("### Summary Statistics")
-    st.write(data_cleaned.describe())
+    st.write(data.describe())
 
-    # EDA: Histograms
-    st.write("### Histograms")
-    numeric_cols = data_cleaned.select_dtypes(include=np.number).columns.tolist()
+    # Histograms Before Cleaning
+    st.write("### Histograms (Before Cleaning)")
+    numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
     for col in numeric_cols:
         st.write(f"Histogram for {col}")
         fig, ax = plt.subplots()
-        data_cleaned[col].hist(ax=ax, bins=20)
+        data[col].hist(ax=ax, bins=20)
         ax.set_title(f"Histogram for {col}")
         ax.set_xlabel(col)
         ax.set_ylabel("Frequency")
         st.pyplot(fig)
 
-    # EDA: Boxplots
-    st.write("### Boxplots")
-    for col in numeric_cols:
-        st.write(f"Boxplot for {col}")
-        fig, ax = plt.subplots()
-        data_cleaned[col].plot(kind="box", ax=ax)
-        ax.set_title(f"Boxplot for {col}")
-        st.pyplot(fig)
+    # Data Cleaning
+    st.write("## Data Cleaning")
+    st.write("Dropping rows where quantity <= 0, price <= 0, price > 200, and rows with specified stockcodes.")
+
+    # Filter rows based on quantity and price
+    cleaned_data = data[
+        (data["quantity"] > 0) &
+        (data["price"] > 0) &
+        (data["price"] <= 200)
+    ]
+
+    # Drop specified stockcodes
+    excluded_stockcodes = ["bankcharges", "c2", "dot", "post"]
+    if "stockcode" in cleaned_data.columns:
+        cleaned_data = cleaned_data[~cleaned_data["stockcode"].str.lower().isin(excluded_stockcodes)]
+
+    st.write("### Cleaned Dataset")
+    st.dataframe(cleaned_data)
+
+    # EDA After Cleaning
+    st.write("## Exploratory Data Analysis (After Cleaning)")
+    st.write("### Summary Statistics")
+    st.write(cleaned_data.describe())
+
+    # Compare Boxplots Before and After Cleaning
+    st.write("### Boxplots Comparison: Before and After Cleaning")
+    compare_boxplots(data, cleaned_data, numeric_cols)
+
+    # Feature Engineering
+    st.write("## Feature Engineering")
+    if all(col in cleaned_data.columns for col in ["quantity", "price", "customer_id", "invoice_date"]):
+        cleaned_data["transaction_value"] = cleaned_data["quantity"] * cleaned_data["price"]
+        customer_group = cleaned_data.groupby("customer_id").agg(
+            frequency=("invoice_date", "count"),
+            avg_transaction_value=("transaction_value", "mean"),
+            total_transaction_value=("transaction_value", "sum"),
+            length_of_relationship=("invoice_date", lambda x: (x.max() - x.min()).days if len(x) > 1 else 0)
+        ).reset_index()
+        st.write("### Engineered Features")
+        st.dataframe(customer_group)
+    else:
+        st.warning("Required columns (e.g., 'quantity', 'price', 'customer_id', 'invoice_date') are missing for feature engineering.")
 
     # Predicting CLTV
     st.write("## CLTV Prediction")
-    target_col = st.selectbox("Select the target column (CLTV)", options=numeric_cols)
-    feature_cols = st.multiselect("Select feature columns", options=numeric_cols, default=[col for col in numeric_cols if col != target_col])
+    target_col = st.selectbox("Select the target column (CLTV)", options=customer_group.columns if "customer_group" in locals() else numeric_cols)
+    feature_cols = st.multiselect(
+        "Select feature columns",
+        options=[col for col in customer_group.columns if col != target_col] if "customer_group" in locals() else numeric_cols
+    )
 
     if target_col and feature_cols:
-        X = data_cleaned[feature_cols]
-        y = data_cleaned[target_col]
+        X = customer_group[feature_cols]
+        y = customer_group[target_col]
 
         # Split the data
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
