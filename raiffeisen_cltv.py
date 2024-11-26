@@ -2,134 +2,167 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from lifetimes import GammaGammaFitter
-from lifetimes import BetaGeoFitter
+from lifetimes import BetaGeoFitter, GammaGammaFitter
 
-st.title("CLTV Prediction App (Probabilistic Model)")
+# Set Page Layout
+st.set_page_config(layout="wide")
+st.title("Raiffeisen Bank - Customer Lifetime Value Dashboard")
 
-@st.cache_data
-def read_file(file):
-    if file.name.endswith("csv"):
-        return pd.read_csv(file)
-    elif file.name.endswith(("xlsx", "xls")):
-        return pd.read_excel(file)
-    elif file.name.endswith("json"):
-        return pd.read_json(file)
-
-def compare_boxplots(data_before, data_after, numeric_cols):
-    for col in numeric_cols:
-        if col in data_after.columns:
-            fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharey=True)
-            data_before[col].plot(kind="box", ax=axes[0], title=f"Before Cleaning: {col}")
-            data_after[col].plot(kind="box", ax=axes[1], title=f"After Cleaning: {col}")
-            axes[0].set_ylabel("Values")
-            plt.tight_layout()
-            st.pyplot(fig)
-
-def plot_histograms(data, title):
-    numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
-    for col in numeric_cols:
-        st.write(f"Histogram for {col} ({title})")
-        fig, ax = plt.subplots()
-        data[col].hist(ax=ax, bins=20)
-        ax.set_title(f"{col} ({title})")
-        ax.set_xlabel(col)
-        ax.set_ylabel("Frequency")
-        st.pyplot(fig)
-
-uploaded_file = st.sidebar.file_uploader("Upload a CSV, Excel, or JSON file", type=["csv", "xlsx", "xls", "json"])
+# File Upload
+uploaded_file = st.file_uploader("Upload Customer Transaction Data", type=["csv", "xlsx"])
 
 if uploaded_file:
-    try:
-        data = read_file(uploaded_file)
-        st.write("## Uploaded Dataset")
-        st.dataframe(data)
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
+    # Load data
+    file_extension = uploaded_file.name.split(".")[-1].lower()
+    if file_extension == "csv":
+        data = pd.read_csv(uploaded_file)
+    elif file_extension in ["xlsx", "xls"]:
+        import openpyxl
+        data = pd.read_excel(uploaded_file)
+    else:
+        st.error("Unsupported file format.")
         st.stop()
 
-    st.write("## EDA Before Cleaning")
-    st.write("### Summary Statistics")
-    st.write(data.describe())
-    plot_histograms(data, "Before Cleaning")
+    # Detect Columns Dynamically
+    def detect_column(possible_names):
+        """
+        Detect a column from the dataset dynamically based on possible column names.
+        :param possible_names: List of possible names for a column
+        :return: Detected column name or None
+        """
+        for col in data.columns:
+            if any(name.lower() in col.lower() for name in possible_names):
+                return col
+        return None
 
-    st.write("## Data Cleaning")
-    required_columns = ["quantity", "price"]
-    if all(col in data.columns for col in required_columns):
-        cleaned_data = data[
-            (data["quantity"] > 0) & 
-            (data["price"] > 0) & 
-            (data["price"] <= 200)
-        ]
+    # Expected Columns with Possible Names
+    expected_columns = {
+        "CustomerID": ["customerid", "customer id", "cstid", "id"],
+        "Quantity": ["quantity", "qty", "amount"],
+        "UnitPrice": ["unitprice", "price per unit", "price"],
+        "InvoiceDate": ["invoicedate", "date", "transaction date"],
+        "StockCode": ["stockcode", "stock code", "item code", "sku"]
+    }
+
+    # Dynamically detect and rename columns
+    detected_columns = {key: detect_column(names) for key, names in expected_columns.items()}
+    missing_columns = [key for key, col in detected_columns.items() if col is None]
+
+    if missing_columns:
+        st.error(f"Missing required columns: {', '.join(missing_columns)}")
+        st.stop()
+
+    # Rename detected columns to standard names
+    data = data.rename(columns={v: k for k, v in detected_columns.items()})
+
+    # Validate Data
+    if data.empty:
+        st.error("Uploaded dataset is empty or invalid. Please check the file and try again.")
+        st.stop()
+
+    # Preprocess Data
+    data["InvoiceDate"] = pd.to_datetime(data["InvoiceDate"])
+    data["TotalPrice"] = data["Quantity"] * data["UnitPrice"]
+
+    # Layout Sections
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.subheader("Uploaded Data Preview")
+        st.dataframe(data.head(10))
+
+    with col2:
+        st.subheader("Data Summary")
+        st.write(f"Total Transactions: {len(data)}")
+        st.write(f"Total Customers: {data['CustomerID'].nunique()}")
+        st.write(f"Total Revenue: ${data['TotalPrice'].sum():,.2f}")
+
+    # EDA Section
+    st.markdown("---")
+    st.header("Exploratory Data Analysis")
+
+    # Date Range Selector
+    min_date = data["InvoiceDate"].min().date()
+    max_date = data["InvoiceDate"].max().date()
+
+    date_range = st.slider(
+        "Select Date Range for Analysis",
+        min_value=min_date,
+        max_value=max_date,
+        value=(min_date, max_date),
+    )
+
+    filtered_data = data[
+        (data["InvoiceDate"] >= pd.Timestamp(date_range[0])) &
+        (data["InvoiceDate"] <= pd.Timestamp(date_range[1]))
+    ]
+
+    # Sales Over Time
+    st.subheader("Sales Over Time")
+    sales_over_time = filtered_data.groupby(filtered_data["InvoiceDate"].dt.to_period("M"))["TotalPrice"].sum()
+    fig, ax = plt.subplots(figsize=(10, 5))
+    sales_over_time.plot(kind="line", ax=ax)
+    ax.set_title("Monthly Sales")
+    ax.set_ylabel("Sales Amount")
+    st.pyplot(fig)
+
+    # Heatmap
+    st.subheader("Sales Heatmap (Day vs Hour)")
+    filtered_data["Day"] = filtered_data["InvoiceDate"].dt.day_name()
+    filtered_data["Hour"] = filtered_data["InvoiceDate"].dt.hour
+    heatmap_data = filtered_data.pivot_table(values="TotalPrice", index="Day", columns="Hour", aggfunc="sum").fillna(0)
+    st.dataframe(heatmap_data.style.background_gradient(cmap="viridis"))
+
+    # Prediction Section
+    st.markdown("---")
+    st.header("Customer Lifetime Value Prediction")
+
+    rfm = data.groupby("CustomerID").agg(
+        Recency=("InvoiceDate", lambda x: (data["InvoiceDate"].max() - x.max()).days),
+        Frequency=("CustomerID", "count"),
+        Monetary=("TotalPrice", "sum")
+    ).reset_index()
+    rfm["T"] = rfm["Recency"] + 30
+
+    # Fit Models and Predict
+    try:
+        bgf = BetaGeoFitter(penalizer_coef=0.1)
+        bgf.fit(rfm["Frequency"], rfm["Recency"], rfm["T"])
+
+        ggf = GammaGammaFitter(penalizer_coef=0.1)
+        ggf.fit(rfm["Frequency"], rfm["Monetary"])
+
+        rfm["ExpectedRevenue"] = ggf.customer_lifetime_value(
+            bgf, rfm["Frequency"], rfm["Recency"], rfm["T"], rfm["Monetary"], time=12, freq="D"
+        )
+
+        st.subheader("Top Customers by Predicted CLTV")
+        st.dataframe(rfm.sort_values("ExpectedRevenue", ascending=False).head(10))
+
+    except Exception as e:
+        st.error(f"Error during model fitting: {e}")
+
+    # Data Manipulation Section
+    st.markdown("---")
+    st.header("Data Manipulation")
+
+    st.subheader("Filter Data by Customer ID")
+    customer_id_filter = st.text_input("Enter Customer ID")
+    if customer_id_filter:
+        filtered_customer_data = data[data["CustomerID"].astype(str).str.contains(customer_id_filter, na=False)]
+        st.write(filtered_customer_data)
     else:
-        st.write("Dataset does not contain required columns.")
-        cleaned_data = pd.DataFrame()
+        st.write("No filter applied.")
 
-    if "stockcode" in cleaned_data.columns:
-        excluded_stockcodes = ["bankcharges", "c2", "dot", "post"]
-        cleaned_data = cleaned_data[~cleaned_data["stockcode"].str.lower().isin(excluded_stockcodes)]
-    else:
-        st.write("Stockcode column not found in dataset.")
+    # Download Section
+    st.markdown("---")
+    st.subheader("Download Processed Data")
+    st.download_button(
+        "Download RFM and CLTV Results",
+        rfm.to_csv(index=False).encode("utf-8"),
+        "rfm_cltv_results.csv",
+        "text/csv",
+    )
 
-    if not cleaned_data.empty:
-        st.write("### Cleaned Dataset")
-        st.dataframe(cleaned_data)
-
-        st.write("## EDA After Cleaning")
-        st.write("### Summary Statistics")
-        st.write(cleaned_data.describe())
-        plot_histograms(cleaned_data, "After Cleaning")
-
-        st.write("### Boxplots Comparison")
-        numeric_cols = data.select_dtypes(include=np.number).columns.tolist()
-        compare_boxplots(data, cleaned_data, numeric_cols)
-
-        st.write("## Feature Engineering")
-        if all(col in cleaned_data.columns for col in ["quantity", "price", "customer_id", "invoice_date"]):
-            cleaned_data["transaction_value"] = cleaned_data["quantity"] * cleaned_data["price"]
-
-            customer_group = cleaned_data.groupby("customer_id").agg(
-                frequency=("invoice_date", "count"),
-                avg_transaction_value=("transaction_value", "mean"),
-                total_transaction_value=("transaction_value", "sum")
-            ).reset_index()
-            
-            # Filter customers with at least 2 transactions for probabilistic modeling
-            customer_group = customer_group[customer_group["frequency"] > 1]
-
-            st.write("### Engineered Features")
-            st.dataframe(customer_group)
-
-            st.write("## CLTV Prediction Using Gamma-Gamma Model")
-            
-            # Fit the Gamma-Gamma model
-            ggf = GammaGammaFitter(penalizer_coef=0.01)
-            ggf.fit(customer_group["frequency"], customer_group["avg_transaction_value"])
-
-            # Estimate monetary value (CLTV)
-            customer_group["predicted_cltv"] = ggf.conditional_expected_average_profit(
-                customer_group["frequency"], 
-                customer_group["avg_transaction_value"]
-            )
-
-            st.write("### Predicted CLTV")
-            st.dataframe(customer_group[["customer_id", "predicted_cltv"]])
-
-            st.write("### Gamma-Gamma Model Parameters")
-            st.write(f"p: {ggf.params_['p']:.2f}, q: {ggf.params_['q']:.2f}, v: {ggf.params_['v']:.2f}")
-
-            # Visualize the distribution of predicted CLTV
-            fig, ax = plt.subplots()
-            customer_group["predicted_cltv"].hist(ax=ax, bins=20)
-            ax.set_title("Predicted CLTV Distribution")
-            ax.set_xlabel("Predicted CLTV")
-            ax.set_ylabel("Frequency")
-            st.pyplot(fig)
-
-        else:
-            st.warning("Required columns (e.g., 'quantity', 'price', 'customer_id', 'invoice_date') are missing for feature engineering.")
-
-    else:
-        st.write("Cleaned dataset is empty. Check cleaning criteria.")
 else:
-    st.write("Upload a dataset to get started.")
+    st.info("Please upload a file to start.")
